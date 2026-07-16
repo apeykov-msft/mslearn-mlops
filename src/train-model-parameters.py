@@ -118,7 +118,7 @@ def parse_args():
     # return args
     return args
 
-# run script
+# run scriptt
 if __name__ == "__main__":
     # add space in logs
     print("\n\n")
