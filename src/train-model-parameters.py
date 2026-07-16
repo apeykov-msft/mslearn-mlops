@@ -60,7 +60,7 @@ def train_model(reg_rate, X_train, X_test, y_train, y_test):
 
     return model
 
-# function that evaluates the model
+# function that evaluates the modell
 def eval_model(model, X_test, y_test):
     # calculate accuracy
     y_hat = model.predict(X_test)
