@@ -1,4 +1,4 @@
-from azure.identity import DefaultAzureCredential
+from azure.identity import AzureCliCredential
 from azure.ai.ml import MLClient
 from azure.ai.ml.entities import (
     DataCollector,
@@ -37,7 +37,7 @@ def parse_args():
 
 
 def get_ml_client(subscription_id: str, resource_group: str, workspace: str) -> MLClient:
-    credential = DefaultAzureCredential()
+    credential = AzureCliCredential()
     return MLClient(
         credential=credential,
         subscription_id=subscription_id,
