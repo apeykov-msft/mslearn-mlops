@@ -12,6 +12,7 @@ from azure.core.exceptions import ResourceNotFoundError
 
 import argparse
 import datetime
+import re
 
 
 def get_data_collector() -> DataCollector:
@@ -43,6 +44,21 @@ def get_ml_client(subscription_id: str, resource_group: str, workspace: str) -> 
         resource_group_name=resource_group,
         workspace_name=workspace,
     )
+
+
+def normalize_endpoint_name(endpoint_name: str) -> str:
+    # Azure ML endpoint names must start with a letter and contain only letters,
+    # numbers, and hyphens.
+    normalized = re.sub(r"[^A-Za-z0-9-]", "-", endpoint_name).lower()
+    normalized = re.sub(r"-+", "-", normalized).strip("-")
+
+    if not normalized:
+        normalized = "diabetes-endpoint"
+
+    if not normalized[0].isalpha():
+        normalized = f"ep-{normalized}"
+
+    return normalized
 
 
 def ensure_endpoint(ml_client: MLClient, endpoint_name: str) -> ManagedOnlineEndpoint:
@@ -88,6 +104,13 @@ def set_traffic_to_deployment(ml_client: MLClient, endpoint_name: str, deploymen
 
 def main() -> None:
     args = parse_args()
+    safe_endpoint_name = normalize_endpoint_name(args.endpoint_name)
+
+    if safe_endpoint_name != args.endpoint_name:
+        print(
+            f"Endpoint name '{args.endpoint_name}' is not AML-safe. "
+            f"Using '{safe_endpoint_name}' instead."
+        )
 
     print("Connecting to Azure Machine Learning workspace...")
     ml_client = get_ml_client(
@@ -96,8 +119,8 @@ def main() -> None:
         workspace=args.workspace,
     )
 
-    print(f"Ensuring online endpoint '{args.endpoint_name}' exists...")
-    endpoint = ensure_endpoint(ml_client, args.endpoint_name)
+    print(f"Ensuring online endpoint '{safe_endpoint_name}' exists...")
+    endpoint = ensure_endpoint(ml_client, safe_endpoint_name)
     print(f"Using endpoint: {endpoint.name}")
 
     print(f"Creating or updating deployment '{args.deployment_name}'...")
