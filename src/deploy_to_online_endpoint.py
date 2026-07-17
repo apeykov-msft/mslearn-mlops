@@ -47,7 +47,7 @@ def get_ml_client(subscription_id: str, resource_group: str, workspace: str) -> 
 
 
 def normalize_endpoint_name(endpoint_name: str) -> str:
-    # Azure ML endpoint names must start with a letter and contain only letters,
+    # Azure ML endpoint names must start with a letter and contain only letters,a
     # numbers, and hyphens.
     normalized = re.sub(r"[^A-Za-z0-9-]", "-", endpoint_name).lower()
     normalized = re.sub(r"-+", "-", normalized).strip("-")
