@@ -38,15 +38,16 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Set Azure subscription
-        run: |
-          SUBSCRIPTION_ID=$(python -c "import json; print(json.loads('''${{ secrets.AZURE_CREDENTIALS }}''')['subscriptionId'])")
-          az account set --subscription "$SUBSCRIPTION_ID"
-
       - name: Register Azure ML resource provider
         run: |
+          az account show --query id -o tsv
           az provider register --namespace Microsoft.MachineLearningServices
-          az provider show --namespace Microsoft.MachineLearningServices --query registrationState -o tsv
+          STATE=$(az provider show --namespace Microsoft.MachineLearningServices --query registrationState -o tsv)
+          echo "Microsoft.MachineLearningServices registration state: $STATE"
+          if [ "$STATE" != "Registered" ]; then
+            echo "Provider is not fully registered yet." >&2
+            exit 1
+          fi
 
       - name: Debug Azure context
         run: |
