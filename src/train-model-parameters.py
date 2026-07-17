@@ -60,7 +60,7 @@ def train_model(reg_rate, X_train, X_test, y_train, y_test):
 
     return model
 
-# function that evaluates the model
+# function that evaluates the modell
 def eval_model(model, X_test, y_test):
     # calculate accuracy
     y_hat = model.predict(X_test)
@@ -118,7 +118,7 @@ def parse_args():
     # return args
     return args
 
-# run script
+# run scriptt
 if __name__ == "__main__":
     # add space in logs
     print("\n\n")
