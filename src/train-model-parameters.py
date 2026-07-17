@@ -42,7 +42,7 @@ def get_data(path):
 
     return df
 
-# function that splits the data
+# function that splits the dataaa
 def split_data(df):
     print("Splitting data...")
     X, y = df[['Pregnancies','PlasmaGlucose','DiastolicBloodPressure','TricepsThickness',
