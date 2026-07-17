@@ -67,7 +67,12 @@ jobs:
 
           # unique, deterministic, region-safe name
           SUFFIX="${WS_NAME#mlw-ai300-l}"
-          ENDPOINT_NAME="diabetes-endpoint-${SUFFIX:0:8}"
+          SUFFIX="${SUFFIX#-}"
+          SAFE_SUFFIX=$(echo "$SUFFIX" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-')
+          ENDPOINT_NAME="diabetes-endpoint-${SAFE_SUFFIX:0:8}"
+          ENDPOINT_NAME=$(echo "$ENDPOINT_NAME" | sed 's/--*/-/g; s/-$//')
+
+          echo "Resolved endpoint_name: $ENDPOINT_NAME"
 
           echo "resource_group=$RG_NAME" >> "$GITHUB_OUTPUT"
           echo "workspace=$WS_NAME" >> "$GITHUB_OUTPUT"
