@@ -12,7 +12,7 @@ from azure.core.exceptions import ResourceNotFoundError
 
 import argparse
 import datetime
-
+#test
 
 def get_data_collector() -> DataCollector:
     return DataCollector(
