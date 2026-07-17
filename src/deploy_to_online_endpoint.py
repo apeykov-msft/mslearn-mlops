@@ -62,15 +62,44 @@ def normalize_endpoint_name(endpoint_name: str) -> str:
 
 
 def ensure_endpoint(ml_client: MLClient, endpoint_name: str) -> ManagedOnlineEndpoint:
+    endpoint = ManagedOnlineEndpoint(
+        name=endpoint_name,
+        description="Online endpoint for MLflow diabetes model",
+        auth_mode="key",
+    )
+
     try:
         return ml_client.online_endpoints.get(name=endpoint_name)
     except ResourceNotFoundError:
-        endpoint = ManagedOnlineEndpoint(
-            name=endpoint_name,
-            description="Online endpoint for MLflow diabetes model",
-            auth_mode="key",
-        )
         return ml_client.online_endpoints.begin_create_or_update(endpoint).result()
+
+
+def is_endpoint_recovery_error(error: Exception) -> bool:
+    message = str(error).lower()
+    return (
+        "deleting provisioning state" in message
+        or "has not been created successfully" in message
+    )
+
+
+def recover_endpoint(ml_client: MLClient, endpoint_name: str) -> ManagedOnlineEndpoint:
+    print(
+        f"Endpoint '{endpoint_name}' appears unhealthy (failed/deleting). "
+        "Recreating endpoint..."
+    )
+    try:
+        ml_client.online_endpoints.begin_delete(name=endpoint_name).wait()
+    except ResourceNotFoundError:
+        pass
+    except Exception as delete_error:
+        print(f"Delete attempt warning: {delete_error}")
+
+    endpoint = ManagedOnlineEndpoint(
+        name=endpoint_name,
+        description="Online endpoint for MLflow diabetes model",
+        auth_mode="key",
+    )
+    return ml_client.online_endpoints.begin_create_or_update(endpoint).result()
 
 
 def create_or_update_deployment(
@@ -124,11 +153,24 @@ def main() -> None:
     print(f"Using endpoint: {endpoint.name}")
 
     print(f"Creating or updating deployment '{args.deployment_name}'...")
-    deployment = create_or_update_deployment(
-        ml_client=ml_client,
-        endpoint_name=endpoint.name,
-        deployment_name=args.deployment_name,
-    )
+    try:
+        deployment = create_or_update_deployment(
+            ml_client=ml_client,
+            endpoint_name=endpoint.name,
+            deployment_name=args.deployment_name,
+        )
+    except Exception as deploy_error:
+        if not is_endpoint_recovery_error(deploy_error):
+            raise
+
+        print(f"Deployment failed with recoverable endpoint state: {deploy_error}")
+        endpoint = recover_endpoint(ml_client, endpoint.name)
+        print("Retrying deployment after endpoint recovery...")
+        deployment = create_or_update_deployment(
+            ml_client=ml_client,
+            endpoint_name=endpoint.name,
+            deployment_name=args.deployment_name,
+        )
     print(f"Deployment state: {deployment.provisioning_state}")
 
     print("Directing 100% of traffic to the deployment...")
