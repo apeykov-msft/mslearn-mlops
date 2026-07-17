@@ -38,6 +38,21 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+      - name: Set Azure subscription
+        run: |
+          SUBSCRIPTION_ID=$(python -c "import json; print(json.loads('''${{ secrets.AZURE_CREDENTIALS }}''')['subscriptionId'])")
+          az account set --subscription "$SUBSCRIPTION_ID"
+
+      - name: Register Azure ML resource provider
+        run: |
+          az provider register --namespace Microsoft.MachineLearningServices
+          az provider show --namespace Microsoft.MachineLearningServices --query registrationState -o tsv
+
+      - name: Debug Azure context
+        run: |
+          az account show --output table
+          az configure --list-defaults
+
       - name: Install Azure ML CLI
         run: |
           az extension add -n ml -y
