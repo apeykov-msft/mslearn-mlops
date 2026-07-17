@@ -1,27 +1,9 @@
-from azure.identity import AzureCliCredential
-from azure.ai.ml import MLClient
-from azure.ai.ml.entities import (
-    DataCollector,
-    DeploymentCollection,
-    ManagedOnlineDeployment,
-    ManagedOnlineEndpoint,
-    Model,
-)
-from azure.ai.ml.constants import AssetTypes
-from azure.core.exceptions import ResourceNotFoundError
-
 import argparse
-import datetime
+import json
 import re
-
-
-def get_data_collector() -> DataCollector:
-    return DataCollector(
-        collections={
-            "model_inputs": DeploymentCollection(enabled="true"),
-            "model_outputs": DeploymentCollection(enabled="true"),
-        }
-    )
+import subprocess
+import tempfile
+from pathlib import Path
 
 
 def parse_args():
@@ -36,19 +18,12 @@ def parse_args():
     return parser.parse_args()
 
 
-def get_ml_client(subscription_id: str, resource_group: str, workspace: str) -> MLClient:
-    credential = AzureCliCredential()
-    return MLClient(
-        credential=credential,
-        subscription_id=subscription_id,
-        resource_group_name=resource_group,
-        workspace_name=workspace,
-    )
+def run_az(command: list[str], check: bool = True) -> subprocess.CompletedProcess:
+    print("Running:", " ".join(command))
+    return subprocess.run(command, check=check, text=True, capture_output=True)
 
 
 def normalize_endpoint_name(endpoint_name: str) -> str:
-    # Azure ML endpoint names must start with a letter and contain only letters,a
-    # numbers, and hyphens.
     normalized = re.sub(r"[^A-Za-z0-9-]", "-", endpoint_name).lower()
     normalized = re.sub(r"-+", "-", normalized).strip("-")
 
@@ -61,74 +36,153 @@ def normalize_endpoint_name(endpoint_name: str) -> str:
     return normalized
 
 
-def ensure_endpoint(ml_client: MLClient, endpoint_name: str) -> ManagedOnlineEndpoint:
-    endpoint = ManagedOnlineEndpoint(
-        name=endpoint_name,
-        description="Online endpoint for MLflow diabetes model",
-        auth_mode="key",
+def endpoint_exists(resource_group: str, workspace: str, endpoint_name: str) -> bool:
+    result = run_az(
+        [
+            "az",
+            "ml",
+            "online-endpoint",
+            "show",
+            "--resource-group",
+            resource_group,
+            "--workspace-name",
+            workspace,
+            "--name",
+            endpoint_name,
+            "-o",
+            "json",
+        ],
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def create_endpoint(resource_group: str, workspace: str, endpoint_name: str) -> None:
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as tmp:
+        endpoint_spec = {
+            "$schema": "https://azuremlschemas.azureedge.net/latest/managedOnlineEndpoint.schema.json",
+            "name": endpoint_name,
+            "auth_mode": "key",
+            "description": "Online endpoint for MLflow diabetes model",
+        }
+        json.dump(endpoint_spec, tmp)
+        spec_path = tmp.name
+
+    run_az(
+        [
+            "az",
+            "ml",
+            "online-endpoint",
+            "create",
+            "--resource-group",
+            resource_group,
+            "--workspace-name",
+            workspace,
+            "--file",
+            spec_path,
+        ]
     )
 
-    try:
-        return ml_client.online_endpoints.get(name=endpoint_name)
-    except ResourceNotFoundError:
-        return ml_client.online_endpoints.begin_create_or_update(endpoint).result()
+
+def delete_endpoint(resource_group: str, workspace: str, endpoint_name: str) -> None:
+    run_az(
+        [
+            "az",
+            "ml",
+            "online-endpoint",
+            "delete",
+            "--resource-group",
+            resource_group,
+            "--workspace-name",
+            workspace,
+            "--name",
+            endpoint_name,
+            "--yes",
+        ],
+        check=False,
+    )
 
 
-def is_endpoint_recovery_error(error: Exception) -> bool:
-    message = str(error).lower()
+def ensure_endpoint(resource_group: str, workspace: str, endpoint_name: str) -> None:
+    if endpoint_exists(resource_group, workspace, endpoint_name):
+        print(f"Online endpoint '{endpoint_name}' already exists.")
+        return
+
+    print(f"Creating endpoint '{endpoint_name}'...")
+    create_endpoint(resource_group, workspace, endpoint_name)
+
+
+def create_or_update_deployment(
+    resource_group: str,
+    workspace: str,
+    endpoint_name: str,
+    deployment_name: str,
+) -> None:
+    model_path = str((Path(__file__).resolve().parent.parent / "model").as_posix())
+
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as tmp:
+        deployment_spec = {
+            "$schema": "https://azuremlschemas.azureedge.net/latest/managedOnlineDeployment.schema.json",
+            "name": deployment_name,
+            "endpoint_name": endpoint_name,
+            "model": model_path,
+            "instance_type": "Standard_D2as_v4",
+            "instance_count": 1,
+            "data_collector": {
+                "collections": {
+                    "model_inputs": {"enabled": True},
+                    "model_outputs": {"enabled": True},
+                }
+            },
+        }
+        json.dump(deployment_spec, tmp)
+        spec_path = tmp.name
+
+    run_az(
+        [
+            "az",
+            "ml",
+            "online-deployment",
+            "create",
+            "--resource-group",
+            resource_group,
+            "--workspace-name",
+            workspace,
+            "--file",
+            spec_path,
+            "--all-traffic",
+        ]
+    )
+
+
+def get_endpoint_scoring_uri(resource_group: str, workspace: str, endpoint_name: str) -> str:
+    result = run_az(
+        [
+            "az",
+            "ml",
+            "online-endpoint",
+            "show",
+            "--resource-group",
+            resource_group,
+            "--workspace-name",
+            workspace,
+            "--name",
+            endpoint_name,
+            "--query",
+            "scoring_uri",
+            "-o",
+            "tsv",
+        ]
+    )
+    return result.stdout.strip()
+
+
+def is_endpoint_recovery_error(error_text: str) -> bool:
+    message = error_text.lower()
     return (
         "deleting provisioning state" in message
         or "has not been created successfully" in message
     )
-
-
-def recover_endpoint(ml_client: MLClient, endpoint_name: str) -> ManagedOnlineEndpoint:
-    print(
-        f"Endpoint '{endpoint_name}' appears unhealthy (failed/deleting). "
-        "Recreating endpoint..."
-    )
-    try:
-        ml_client.online_endpoints.begin_delete(name=endpoint_name).wait()
-    except ResourceNotFoundError:
-        pass
-    except Exception as delete_error:
-        print(f"Delete attempt warning: {delete_error}")
-
-    endpoint = ManagedOnlineEndpoint(
-        name=endpoint_name,
-        description="Online endpoint for MLflow diabetes model",
-        auth_mode="key",
-    )
-    return ml_client.online_endpoints.begin_create_or_update(endpoint).result()
-
-
-def create_or_update_deployment(
-    ml_client: MLClient,
-    endpoint_name: str,
-    deployment_name: str,
-) -> ManagedOnlineDeployment:
-    model = Model(
-        path="./model",
-        type=AssetTypes.MLFLOW_MODEL,
-        description="MLflow diabetes classification model",
-    )
-
-    deployment = ManagedOnlineDeployment(
-        name=deployment_name,
-        endpoint_name=endpoint_name,
-        model=model,
-        instance_type="Standard_D2as_v4",
-        instance_count=1,
-        data_collector=get_data_collector(),
-    )
-
-    return ml_client.online_deployments.begin_create_or_update(deployment).result()
-
-
-def set_traffic_to_deployment(ml_client: MLClient, endpoint_name: str, deployment_name: str) -> None:
-    endpoint = ml_client.online_endpoints.get(name=endpoint_name)
-    endpoint.traffic = {deployment_name: 100}
-    ml_client.online_endpoints.begin_create_or_update(endpoint).result()
 
 
 def main() -> None:
@@ -141,43 +195,36 @@ def main() -> None:
             f"Using '{safe_endpoint_name}' instead."
         )
 
-    print("Connecting to Azure Machine Learning workspace...")
-    ml_client = get_ml_client(
-        subscription_id=args.subscription_id,
-        resource_group=args.resource_group,
-        workspace=args.workspace,
-    )
-
-    print(f"Ensuring online endpoint '{safe_endpoint_name}' exists...")
-    endpoint = ensure_endpoint(ml_client, safe_endpoint_name)
-    print(f"Using endpoint: {endpoint.name}")
+    print("Ensuring online endpoint exists...")
+    ensure_endpoint(args.resource_group, args.workspace, safe_endpoint_name)
 
     print(f"Creating or updating deployment '{args.deployment_name}'...")
     try:
-        deployment = create_or_update_deployment(
-            ml_client=ml_client,
-            endpoint_name=endpoint.name,
+        create_or_update_deployment(
+            resource_group=args.resource_group,
+            workspace=args.workspace,
+            endpoint_name=safe_endpoint_name,
             deployment_name=args.deployment_name,
         )
-    except Exception as deploy_error:
-        if not is_endpoint_recovery_error(deploy_error):
+    except subprocess.CalledProcessError as deploy_error:
+        error_output = (deploy_error.stderr or "") + "\n" + (deploy_error.stdout or "")
+        if not is_endpoint_recovery_error(error_output):
             raise
 
-        print(f"Deployment failed with recoverable endpoint state: {deploy_error}")
-        endpoint = recover_endpoint(ml_client, endpoint.name)
+        print("Deployment failed with recoverable endpoint state. Recreating endpoint...")
+        delete_endpoint(args.resource_group, args.workspace, safe_endpoint_name)
+        create_endpoint(args.resource_group, args.workspace, safe_endpoint_name)
+
         print("Retrying deployment after endpoint recovery...")
-        deployment = create_or_update_deployment(
-            ml_client=ml_client,
-            endpoint_name=endpoint.name,
+        create_or_update_deployment(
+            resource_group=args.resource_group,
+            workspace=args.workspace,
+            endpoint_name=safe_endpoint_name,
             deployment_name=args.deployment_name,
         )
-    print(f"Deployment state: {deployment.provisioning_state}")
 
-    print("Directing 100% of traffic to the deployment...")
-    set_traffic_to_deployment(ml_client, endpoint.name, args.deployment_name)
-
-    endpoint = ml_client.online_endpoints.get(name=endpoint.name)
-    print(f"Deployment complete. Scoring URI: {endpoint.scoring_uri}")
+    scoring_uri = get_endpoint_scoring_uri(args.resource_group, args.workspace, safe_endpoint_name)
+    print(f"Deployment complete. Scoring URI: {scoring_uri}")
 
 
 if __name__ == "__main__":
