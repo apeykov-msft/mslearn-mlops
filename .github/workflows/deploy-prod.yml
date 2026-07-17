@@ -38,31 +38,6 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Ensure Azure ML resource provider is registered
-        run: |
-          az account show --query id -o tsv
-
-          STATE=$(az provider show --namespace Microsoft.MachineLearningServices --query registrationState -o tsv || echo "Unknown")
-          echo "Initial Microsoft.MachineLearningServices registration state: $STATE"
-
-          if [ "$STATE" != "Registered" ]; then
-            echo "Attempting provider registration (may fail without subscription-level permissions)..."
-            az provider register --namespace Microsoft.MachineLearningServices || true
-            STATE=$(az provider show --namespace Microsoft.MachineLearningServices --query registrationState -o tsv || echo "Unknown")
-            echo "Post-register state: $STATE"
-          fi
-
-          if [ "$STATE" != "Registered" ]; then
-            echo "Microsoft.MachineLearningServices is not registered." >&2
-            echo "Ask a subscription owner to run: az provider register --namespace Microsoft.MachineLearningServices" >&2
-            exit 1
-          fi
-
-      - name: Debug Azure context
-        run: |
-          az account show --output table
-          az configure --list-defaults
-
       - name: Install Azure ML CLI
         run: |
           az extension add -n ml -y
